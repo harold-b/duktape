@@ -2,6 +2,10 @@
 Duktape debugger
 ================
 
+**FIXME: document that debugger callbacks must not call into Duktape.
+Only current exception is the detached callback which is allowed to
+reattach but not do other API calls.**
+
 Introduction
 ============
 
