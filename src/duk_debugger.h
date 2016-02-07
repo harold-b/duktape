@@ -3,19 +3,41 @@
 
 /* Debugger protocol version is defined in the public API header. */
 
-#define DUK_DBG_MARKER_EOM        0x00
-#define DUK_DBG_MARKER_REQUEST    0x01
-#define DUK_DBG_MARKER_REPLY      0x02
-#define DUK_DBG_MARKER_ERROR      0x03
-#define DUK_DBG_MARKER_NOTIFY     0x04
+/* Initial bytes for markers. */
+#define DUK_DBG_IB_EOM            0x00
+#define DUK_DBG_IB_REQUEST        0x01
+#define DUK_DBG_IB_REPLY          0x02
+#define DUK_DBG_IB_ERROR          0x03
+#define DUK_DBG_IB_NOTIFY         0x04
 
+/* Other initial bytes. */
+#define DUK_DBG_IB_INT4           0x10
+#define DUK_DBG_IB_STR4           0x11
+#define DUK_DBG_IB_STR2           0x12
+#define DUK_DBG_IB_BUF4           0x13
+#define DUK_DBG_IB_BUF2           0x14
+#define DUK_DBG_IB_UNUSED         0x15
+#define DUK_DBG_IB_UNDEFINED      0x16
+#define DUK_DBG_IB_NULL           0x17
+#define DUK_DBG_IB_TRUE           0x18
+#define DUK_DBG_IB_FALSE          0x19
+#define DUK_DBG_IB_NUMBER         0x1a
+#define DUK_DBG_IB_OBJECT         0x1b
+#define DUK_DBG_IB_POINTER        0x1c
+#define DUK_DBG_IB_LIGHTFUNC      0x1d
+#define DUK_DBG_IB_HEAPPTR        0x1e
+/* The short string/integer initial bytes starting from 0x60 don't have
+ * defines now.
+ */
+
+/* Error codes. */
 #define DUK_DBG_ERR_UNKNOWN       0x00
 #define DUK_DBG_ERR_UNSUPPORTED   0x01
 #define DUK_DBG_ERR_TOOMANY       0x02
 #define DUK_DBG_ERR_NOTFOUND      0x03
 #define DUK_DBG_ERR_APPLICATION   0x04
 
-/* Initiated by Duktape */
+/* Commands and notifys initiated by Duktape. */
 #define DUK_DBG_CMD_STATUS        0x01
 #define DUK_DBG_CMD_PRINT         0x02
 #define DUK_DBG_CMD_ALERT         0x03
@@ -24,7 +46,7 @@
 #define DUK_DBG_CMD_DETACHING     0x06
 #define DUK_DBG_CMD_APPNOTIFY     0x07
 
-/* Initiated by debug client */
+/* Commands initiated by debug client. */
 #define DUK_DBG_CMD_BASICINFO     0x10
 #define DUK_DBG_CMD_TRIGGERSTATUS 0x11
 #define DUK_DBG_CMD_PAUSE         0x12
@@ -44,6 +66,14 @@
 #define DUK_DBG_CMD_DUMPHEAP      0x20
 #define DUK_DBG_CMD_GETBYTECODE   0x21
 #define DUK_DBG_CMD_APPREQUEST    0x22
+#define DUK_DBG_CMD_INSPECTHEAPOBJECT 0x23
+#define DUK_DBG_CMD_GARBAGECOLLECT 0x24
+
+/* The low 8 bits map directly to duk_hobject.h DUK_PROPDESC_FLAG_xxx.
+ * The remaining flags are specific to the debugger.
+ */
+#define DUK_DBG_PROPFLAG_INTERNAL    (1 << 8)
+#define DUK_DBG_PROPFLAG_ARTIFICIAL  (1 << 9)
 
 #if defined(DUK_USE_DEBUGGER_SUPPORT)
 DUK_INTERNAL_DECL void duk_debug_do_detach(duk_heap *heap);
@@ -67,6 +97,7 @@ DUK_INTERNAL_DECL void duk_debug_write_bytes(duk_hthread *thr, const duk_uint8_t
 DUK_INTERNAL_DECL void duk_debug_write_byte(duk_hthread *thr, duk_uint8_t x);
 DUK_INTERNAL_DECL void duk_debug_write_unused(duk_hthread *thr);
 DUK_INTERNAL_DECL void duk_debug_write_undefined(duk_hthread *thr);
+DUK_INTERNAL_DECL void duk_debug_write_null(duk_hthread *thr);
 DUK_INTERNAL_DECL void duk_debug_write_int(duk_hthread *thr, duk_int32_t x);
 DUK_INTERNAL_DECL void duk_debug_write_uint(duk_hthread *thr, duk_uint32_t x);
 DUK_INTERNAL_DECL void duk_debug_write_string(duk_hthread *thr, const char *data, duk_size_t length);
@@ -80,6 +111,7 @@ DUK_INTERNAL_DECL void duk_debug_write_heapptr(duk_hthread *thr, duk_heaphdr *h)
 #endif
 DUK_INTERNAL_DECL void duk_debug_write_hobject(duk_hthread *thr, duk_hobject *obj);
 DUK_INTERNAL_DECL void duk_debug_write_tval(duk_hthread *thr, duk_tval *tv);
+/* FIXME: update with changes from InspectHeapObject */
 
 #if 0  /* unused */
 DUK_INTERNAL_DECL void duk_debug_write_request(duk_hthread *thr, duk_small_uint_t command);
