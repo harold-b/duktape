@@ -19,6 +19,8 @@ Duktape provides the following basic debugging features:
 * Eval in the context of any activation on the callstack when paused (can be
   used to implement basic watch expressions)
 
+* Inspecting heap objects and walking property and prototype chains
+
 * Get/put variable at any callstack level
 
 * Forwarding of print(), alert(), and logger writes
@@ -79,7 +81,7 @@ To integrate debugger support into your target, you need to:
   etc.  (A detach can also occur if explicitly requested by the debug client
   or if Duktape detects a debug stream error.)
 
-* **If you have an eventloop**: optionally call ``duk_debugger_cooperate()``
+* **If you have an event loop**: optionally call ``duk_debugger_cooperate()``
   once in a while when no call to Duktape is in progress.  This allows debug
   commands to be executed outside of any Duktape calls.
 
@@ -183,7 +185,8 @@ every bytecode instruction.
 Code footprint
 --------------
 
-Debugger support increases footprint by around 10kB.
+Debugger support increases footprint by around 15-20 kB, depending on
+debugger features enabled.
 
 Memory footprint
 ----------------
@@ -1790,6 +1793,10 @@ dump of the heap state for analysis.
    to implement a heap browser, and will probably be completed together with
    some kind of UI.
 
+.. note:: The dump format may potentially change to leverage InspectHeapObject
+   to read details of individual heap objects.  This command would then simply
+   provide a list of objects the debug client can inspect on its own.
+
 GetBytecode request (0x21)
 --------------------------
 
@@ -1810,6 +1817,9 @@ target endianness and interpret the bytecode based on that.
 
 .. note:: This command is somewhat incomplete at the moment and may be modified
    once the best way to do this in the debugger UI has been figured out.
+
+.. note:: This command may be removed in favor of using InspectHeapObject to
+   get the same bytecode information.
 
 AppRequest request (0x22)
 -------------------------
@@ -1841,6 +1851,266 @@ message and the dvalues it contains are entirely up to the implementation and
 depending on the needs of the application, need not be supported at all.
 
 See "Custom requests and notifications" below for more details.
+
+InspectHeapObject (0x23)
+------------------------
+
+Format::
+
+    REQ <int: 0x23> <tval: heapptr|object|pointer> <uint: flags> EOM
+    REP [ <property> ]* EOM
+
+Inspect a heap object using the provided heap pointer; any dvalue type
+containing a pointer is allowed: heapptr, object, pointer.  The debug client
+is responsible for ensuring that the pointer is safe, i.e. that the pointer
+is valid and the pointer target is still in the Duktape heap:
+
+* When the debugger is paused garbage collection is automatically disabled so
+  that any pointers obtained while the debugger remains paused are safe.  Once
+  execution is resumed using Resume or a step command, all pointers are
+  potentially invalidated by garbage collection.
+
+* When the debugger is not paused the debug client may safely inspect an
+  object if it's known with 100% certainty that the object is reachable and
+  therefore safe to inspect.  Because this is generally not a safe assumption,
+  you should avoid making it unless it's really necessary.
+
+* **WARNING**: Inspecting an unsafe pointer causes memory unsafe behavior and
+  may lead to crashes, etc.
+
+The request flags control what information is provided:
+
+* No flags defined so far.  Property type filtering is a potential feature
+  which may be added later.
+
+The result is a list of property entries, each containing a flags field, a
+key, and a value.  The property list includes:
+
+* The target object's "own" properties, i.e. properties which are conceptually
+  part of the target object's property table:
+
+  - Property attributes are provided explicitly.
+
+  - Accessor properties are described as is, as a setter/getter pair, without
+    invoking the getter.  The debug client can do that explicitly if it so
+    desires.
+
+  - Inherited properties are not enumerated.  The debug client can walk the
+    prototype chain manually by looking up the ``internal_prototype``
+    artificial property and inspecting that object separately.  Prototype
+    walking should carefully avoid failing on a prototype loop.
+
+  - Some properties which are implemented in a fully virtualized fashion are
+    visible in Ecmascript enumeration but may not be visible in the inspection.
+    For example, String object has virtual index properties (0, 1, 2, ...) for
+    string characters, and these are not included in the inspection result at
+    the moment.
+
+* Artificial properties (explicitly marked as such) which are Duktape internal
+  fields and are not actual object properties.
+
+  - Artificial properties include e.g. ``duk_heaphdr`` flags.  Providing these
+    fields as artificial properties makes the protocol format more easily
+    versionable compared to providing all the internal flags as is.
+
+Each property entry is described using the following sequence of dvalues:
+
+* Flags field
+
+  - A bit mask (described below)
+
+* Key
+
+  - String for ordinary properties
+
+  - Number for array index properties of "dense arrays", i.e. arrays which
+    have an internal array part present
+
+* Property value:
+
+  - If property is not an accessor (apparent from flags field): single dvalue
+    representing a duk_tval
+
+  - If property is an accessor: two dvalues pointing to getter and setter
+    functions (respectively)
+
+The flags field is an unsigned integer bitmask with the following bits:
+
++---------+-----------------------------------------------------------------+
+| Bitmask | Description                                                     |
++=========+=================================================================+
+| 0x01    | Property attribute: writable, matches                           |
+|         | DUK_PROPDESC_FLAG_WRITABLE.                                     |
++---------+-----------------------------------------------------------------+
+| 0x02    | Property attribute: enumerable,                                 |
+|         | matches DUK_PROPDESC_FLAG_ENUMERABLE.                           |
++---------+-----------------------------------------------------------------+
+| 0x04    | Property attribute: configurable, matches                       |
+|         | DUK_PROPDESC_FLAG_CONFIGURABLE.                                 |
++---------+-----------------------------------------------------------------+
+| 0x08    | Property attribute: accessore, matches                          |
+|         | DUK_PROPDESC_FLAG_ACCESSOR.                                     |
++---------+-----------------------------------------------------------------+
+| 0x10    | Property is virtual (used internally but should never actually  |
+|         | appear in debug protocol), matches DUK_PROPDESC_FLAG_VIRTUAL.   |
++---------+-----------------------------------------------------------------+
+| 0x100   | Property is internal, and not visible to ordinary Ecmascript    |
+|         | code.  Currently set when initial key byte is 0xFF.             |
++---------+-----------------------------------------------------------------+
+| 0x200   | Property is artificial, e.g. ``duk_heaphdr`` fields mapped into |
+|         | properties for easier versioning.                               |
++---------+-----------------------------------------------------------------+
+
+Artificial properties have the "artificial" flag set which distinguishes them
+unambiguously from other properties, including internal and virtual properties.
+Artifical properties expose internal fields which may change between versions
+and are not part of version guarantees.  As a result the artificial property
+keys and/or values may change between versions.  However, because the
+properties are string keyed it's relatively easy for the debug client to adapt
+to such changes.
+
+The following artificial keys are included in Duktape 1.5.0 (subject to
+change):
+
++---------------------------------+---------------------------+---------------------------------------------------------+
+| Artificial property key         | Object type(s)            | Description                                             |
++=================================+===========================+=========================================================+
+| ``heaphdr_flags``               | ``duk_heaphdr`` (all)     | Raw ``duk_heaphdr`` flags field; the individual flags   |
+|                                 |                           | are also provided as separate artificial properties.    |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``heaphdr_type``                | ``duk_heaphdr`` (all)     | ``duk_heaphdr`` type field, ``DUK_HTYPE_xxx`.           |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``refcount``                    | ``duk_heaphdr`` (all)     | Reference count, omitted if no refcount support.        |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``reachable``                   | ``duk_heaphdr`` (all)     | DUK_HEAPHDR_FLAG_REACHABLE                              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``temproot``                    | ``duk_heaphdr`` (all)     | DUK_HEAPHDR_FLAG_TEMPROOT                               |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``finalizable``                 | ``duk_heaphdr`` (all)     | DUK_HEAPHDR_FLAG_FINALIZABLE                            |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``finalized``                   | ``duk_heaphdr`` (all)     | DUK_HEAPHDR_FLAG_FINALIZED                              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``readonly``                    | ``duk_heaphdr`` (all)     | DUK_HEAPHDR_FLAG_READONLY                               |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``extensible``                  | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXTENSIBLE                             |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``constructable``               | ``duk_hobject``           | DUK_HOBJECT_FLAG_CONSTRUCTABLE                          |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``bound``                       | ``duk_hobject``           | DUK_HOBJECT_FLAG_BOUND                                  |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``compiledfunction``            | ``duk_hobject``           | DUK_HOBJECT_FLAG_COMPILEDFUNCTION                       |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``nativefunction``              | ``duk_hobject``           | DUK_HOBJECT_FLAG_NATIVEFUNCTION                         |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``bufferobject``                | ``duk_hobject``           | DUK_HOBJECT_FLAG_BUFFEROBJECT                           |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``thread``                      | ``duk_hobject``           | DUK_HOBJECT_FLAG_THREAD                                 |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``array_part``                  | ``duk_hobject``           | DUK_HOBJECT_FLAG_ARRAY_PART                             |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``strict``                      | ``duk_hobject``           | DUK_HOBJECT_FLAG_STRICT                                 |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``notail``                      | ``duk_hobject``           | DUK_HOBJECT_FLAG_NOTAIL                                 |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``newenv``                      | ``duk_hobject``           | DUK_HOBJECT_FLAG_NEWENV                                 |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``namebinding``                 | ``duk_hobject``           | DUK_HOBJECT_FLAG_NAMEBINDING                            |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``createargs``                  | ``duk_hobject``           | DUK_HOBJECT_FLAG_CREATEARGS                             |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``envrecclosed``                | ``duk_hobject``           | DUK_HOBJECT_FLAG_ENVRECCLOSED                           |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``exotic_array``                | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXOTIC_ARRAY                           |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``exotic_stringobj``            | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXOTIC_STRINGOBJ                       |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``exotic_arguments``            | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXOTIC_ARGUMENTS                       |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``exotic_dukfunc``              | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXOTIC_DUKFUNC                         |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``exotic_proxyobj``             | ``duk_hobject``           | DUK_HOBJECT_FLAG_EXOTIC_PROXYOBJ                        |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``class_number``                | ``duk_hobject``           | Duktape internal class number (same as object dvalue).  |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``class_name``                  | ``duk_hobject``           | String class name, e.g. ``"ArrayBuffer"``.              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``internal_prototype``          | ``duk_hobject``           | Points to the effective (internal) prototype and allows |
+|                                 |                           | enumeration of inherited properties in client control.  |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``props``                       | ``duk_hobject``           | Current property table allocation.                      |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``e_size``                      | ``duk_hobject``           | Entry part size.                                        |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``e_next``                      | ``duk_hobject``           | Entry part next index (= used size).                    |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``a_size``                      | ``duk_hobject``           | Array part size.                                        |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``h_size``                      | ``duk_hobject``           | Hash part size.                                         |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| (not present yet)               | ``duk_hnativefunction``   | Native function pointer.                                |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``nargs``                       | ``duk_hnativefunction``   | Number of stack arguments.                              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``magic``                       | ``duk_hnativefunction``   | Magic value.                                            |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``varargs``                     | ``duk_hnativefunction``   | True if function has variable arguments.                |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| (not present yet)               | ``duk_hcompiledfunction`` | Ecmascript function data area, including bytecode.      |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``nregs``                       | ``duk_hcompiledfunction`` | Number of bytecode executor registers.                  |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``nargs``                       | ``duk_hcompiledfunction`` | Number of stack arguments.                              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``start_line``                  | ``duk_hcompiledfunction`` | First source code line.                                 |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``end_line``                    | ``duk_hcompiledfunction`` | Last source code line.                                  |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| (no properties yet)             | ``duk_hthread``           | No thread properties yet.                               |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| (not present yet)               | ``duk_hbufferobject``     | Underlying buffer.                                      |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``slice_byte_offset``           | ``duk_hbufferobject``     | Byte offset to underlying buffer for start of slice.    |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``slice_byte_length``           | ``duk_hbufferobject``     | Byte length of slice.                                   |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``elem_shift``                  | ``duk_hbufferobject``     | Shift value for element, e.g. Uint64 -> 3.              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``elem_type``                   | ``duk_hbufferobject``     | DUK_HBUFFEROBJECT_ELEM_xxx                              |
++---------------------------------+---------------------------+---------------------------------------------------------+
+| ``is_view``                     | ``duk_hbufferobject``     | True if bufferobject is a view (e.g. Uint8Array).       |
++---------------------------------+---------------------------+---------------------------------------------------------+
+
+FIXME: strings:
+
+* ``arridx``
+
+* ``internal``
+
+* ``reserved_word``
+
+* ``strict_reserverd_word``
+
+* ``eval_or_arguments``
+
+* ``extdata``
+
+FIXME: buffers:
+
+* ``dynamic``
+
+* ``external``
+
+Threads:
+
+* FIXME: a lot of flags like "strict", interrupt counter values, etc.
+  Also, summarize value stack values here? Should value stack be
+  inspectable?
+
+GarbageCollect (0x24)
+---------------------
+
+FIXME: force garbage collection while paused.  Pointers received before
+the forced collection may become stale.
 
 Custom requests and notifications
 =================================
@@ -2780,7 +3050,8 @@ Accessors and proxies vs. variable get/set
 * Triggering setters / getters may not be desirable.
 
 * Perhaps return value like Object.getOwnPropertyDescriptor(), and allow
-  debug client to invoke the getter if necessary?
+  debug client to invoke the getter if necessary?  (Heap walking provides
+  a similar feature now.)
 
 * Access proxy and target separately?
 
@@ -3034,19 +3305,6 @@ Possible new commands or command improvements
 * More comprehensive callstack inspection, at least on par with what a stack
   trace provides
 
-* Shallow value inspection, ability to inspect internal stuff like internal
-  prototype but also state of object property tables, etc.
-
-  - Should be debug client driven and shallow so that the client can query
-    the value graph on its own.  This avoids the need to handle reference
-    loops on the target.
-
-  - Deep querying needs an object reference: the client can address objects
-    with a heap pointer.  It is then critical that no side effects can be
-    triggered during the traversal to avoid invalidating the heap pointers.
-    All debug commands involved in traversal must be side effect free and
-    perform no allocations.
-
 * Resume with error, i.e. inject error
 
 * Enumerate threads in heap
@@ -3078,70 +3336,8 @@ directly with dvalues, so that when C code does a::
 an arbitrarily complex object value (perhaps even an arbitrary object graph)
 can be decoded and pushed to the value stack.
 
-Heap walking support
---------------------
-
-One option for structured value support is to add support for walking of
-heap objects: the debug client could read heap objects directly, get their
-type and properties, read off further object references, etc.
-
-The basic problem with this approach is pointer safety: if any values
-referenced by the client have already been freed, memory unsafe behavior
-results.  This is quite easy to trigger for e.g. Eval results (which
-become unreachable right after Eval is complete).
-
-Some solutions:
-
-* Prevent mark-and-sweep and refzero queue processing while the debugger
-  message loop is active (or perhaps only when the debugger is paused).
-  This makes heap walking automatically safe while the target is paused,
-  even for objects with a zero refcount, and would be quite intuitive for
-  the debug client because no commands are needed to ensure safety.  One
-  downside is that one might run out of memory doing e.g. a lot of Evals
-  in the paused state.  A few options with this approach:
-
-  - Add an explicit command which allows the debug client to indicate it's
-    safe to run GC on pending objects (while remaining paused).  This would
-    allow the debug client to free resources in certain states (for example,
-    after every heap viewer UI update) so that memory usage wouldn't grow
-    without bound when e.g. also doing a lot of Evals.
-
-  - Add an explicit command to keep the GC freeze active even after resuming
-    the program.  The freeze would be lifted if the debug transport were
-    dropped.  It might also make sense for the freeze to be lifted on the
-    next resume unless the client requests for the freeze to be kept again;
-    this would ensure the freeze wouldn't accidentally be left active
-    indefinitely.
-
-* Add explicit "start walking" and "stop walking" commands to the debug
-  protocol which similarly freeze garbage collection.  This allows the debug
-  client to "lock the heap" for inspection and later on release it.  There
-  would also need to be a mechanism to automatically release the lock if the
-  debug transport was severed (walking state could be kept after a resume, if
-  that was useful for the debug client).  To ensure the debug client behaves
-  correctly, heap walk commands could be rejected when the walking state is
-  not active; this would prevent accidental pointer lookups using unsafe
-  pointers.  The downside of this approach is that pointer walking is either
-  unsafe or causes explicit errors, unless explicit start/stop walk commands
-  are issued by the debug client.
-
-* Use object pinning: debug client would explicitly pin an object it is
-  watching.  That pinning would make the object behave like a reachability
-  root so that anything else that object references would be considered
-  reachable.  There would have to be an automatic mechanism to recover from
-  broken transports etc, so that pinned objects would be automatically
-  unpinned in certain situations.  While pinning is a little awkward for the
-  debug client, it's more accurate than freezing the whole heap for inspection
-  and can be more easily used for a longer time on a running program.
-
-* A variant of object pinning: instead of using heap object flags for
-  pinning, simply add a reachable array e.g. into the heap stash for
-  debugger use.  The debugger could then push objects into the array to
-  effectively pin them (as they'd be reachable through the stash).  When
-  the debugger detaches, that array could be deleted.  This would be quite
-  simple to implement and have a logical automatic unpin mechanism.
-
-See discussion: https://github.com/svaarala/duktape/issues/358.
+Heap walking support alleviates this problem for the cases where the
+structured data resides or can be placed in the Duktape heap.
 
 Heap dump viewer
 ----------------
@@ -3209,3 +3405,21 @@ It might be cleaner to provide either:
 
 * Allow user code to proactively call into Duktape to indicate the transport
   is broken (beyond calling ``duk_debugger_detach()``).
+
+Change callstack entries to avoid getter invocations
+----------------------------------------------------
+
+With heap walking in place callstack variable dump could provide the necessary
+information to distinguish data and accessor properties and let the debug
+client decide if getters are to be invoked.
+
+Callstack primitives could also return the variable list in a format matching
+the InspectHeapObject command, i.e. as a key/value list which also provides
+support for artificial properties and property flags.
+
+Replace GetBytecode with object inspection
+------------------------------------------
+
+The GetBytecode command could be removed by providing a reference to the
+current function and then using object inspection to get the bytecode data
+currently returned in GetBytecode -- that is, the bytecode, constants, etc.
