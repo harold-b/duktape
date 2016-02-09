@@ -1,0 +1,79 @@
+name: duk_put_prop_list
+
+proto: |
+  void duk_put_prop_list(duk_context *ctx, duk_idx_t obj_index, const duk_prop_list_entry *props);
+
+stack: |
+  [ ... obj! ... ] -> [ ... obj! ... ]
+
+summary: |
+  <p>Set multiple properties into a target object from a property list.
+  The property list contains <code>DUK_PROP_xxx()</code> initializer macros
+  which support multiple types, and ends with <code>DUK_PROP_END()</code>.
+  The property list is processed in order, and if a property appears multiple
+  times the last occurrence wins (unless a previous occurrence is non-configurable
+  in which case a TypeError may be thrown.</p>
+
+  <p>This call is useful e.g. when defining modules statically in C code.
+  See test case <b>FIXME</b> for concrete examples.</p>
+
+  <p>Supported property initializers:</p>
+
+  <table>
+  <tr>
+  <td>DUK_PROP_END()</td>
+  <td>Terminates the property list.  Mandatory; if missing, memory unsafe
+  behavior will result.</td>
+  </tr>
+  <tr>
+  <td>DUK_PROP_UNDEFINED(key)</td>
+  <td>Ecmascript <code>undefined</code>.</td>
+  </tr>
+  <tr>
+  <td>DUK_PROP_NULL(key)</td>
+  <td>Ecmascript <code>null</code>.</td>
+  </tr>
+  <tr>
+  <tr>
+  <td>DUK_PROP_BOOLEAN(key,val)</td>
+  <td>Ecmascript boolean, false if val is 0, true otherwise.</td>
+  </tr>
+  <tr>
+  <td>DUK_PROP_NUMBER(key,val)</td>
+  <td>Ecmascript number (IEEE double).</td>
+  </tr>
+  <tr>
+  <td>FIXME</td>
+  <td>Rest.</td>
+  </tr>
+  </table>
+
+  <div class="note">
+  Property initializers are API macros which hide the internal structures
+  needed for initialization.  This allows new macros and initialization features
+  to be introduced without breaking API compatibility.  The macros also hide
+  compiler specific differences for static initializers; some compilers don't
+  support <i>designated union initializers</i> for example in which case
+  Duktape will fall back to using a bit larger struct-based initializers.
+  </div>
+
+  <div class="note">
+  This API call deprecates the more restrictive (and difficult to version)
+  <code><a href="#duk_put_function_list">duk_put_function_list()</a></code> and
+  <code><a href="#duk_put_number_list">duk_put_number_list()</a></code>.
+  </div>
+
+example: |
+  FIXME: example.
+
+  duk_put_prop_list(ctx, -3, my_module_consts);
+
+tags:
+  - property
+  - module
+
+seealso:
+  - duk_put_function_list
+  - duk_put_number_list
+
+introduced: 1.5.0
