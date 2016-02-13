@@ -1408,6 +1408,9 @@ Planned
 * Internal performance improvement: use raw value stack accessors internally
   when it's safe to do so (GH-582)
 
+* Internal performance improvement: minor bytecode executor optimizations
+  (GH-FIXME)
+
 2.0.0 (XXXX-XX-XX)
 ------------------
 
