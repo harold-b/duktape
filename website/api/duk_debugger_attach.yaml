@@ -11,6 +11,8 @@ proto: |
                            void *udata);
 
 summary: |
+  <p>FIXME: point to duk_debugger_attach_custom().</p>
+
   <p>Attach a debugger to the Duktape heap.  If debugger support is not
   compiled into Duktape, throws an error.  See
   <a href="https://github.com/svaarala/duktape/blob/master/doc/debugger.rst">debugger.rst</a>
@@ -43,6 +45,7 @@ tags:
   - debug
 
 seealso:
+  - duk_debugger_attach_custom
   - duk_debugger_detach
   - duk_debugger_cooperate
 

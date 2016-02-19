@@ -1,0 +1,30 @@
+name: duk_debugger_attach_custom
+
+proto: |
+  void duk_debugger_attach_custom(duk_context *ctx,
+                                  duk_debug_read_function read_cb,
+                                  duk_debug_write_function write_cb,
+                                  duk_debug_peek_function peek_cb,
+                                  duk_debug_read_flush_function read_flush_cb,
+                                  duk_debug_write_flush_function write_flush_cb,
+                                  FIXME,
+                                  duk_debug_detached_function detached_cb,
+                                  void *udata);
+
+summary: |
+  <p>FIXME: same as duk_debugger_attach() but with custom request callback.</p>
+
+  <p>FIXME: note that one or the other will be removed in Duktape 2.x.</p>
+
+example: |
+  FIXME
+
+tags:
+  - debug
+
+seealso:
+  - duk_debugger_attach
+  - duk_debugger_detach
+  - duk_debugger_cooperate
+
+introduced: 1.5.0
