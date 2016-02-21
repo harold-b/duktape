@@ -134,7 +134,7 @@ DUK_LOCAL duk_ret_t duk__error_getter_helper(duk_context *ctx, duk_small_int_t o
 	duk_get_prop_stridx(ctx, -1, DUK_STRIDX_INT_TRACEDATA);
 	idx_td = duk_get_top_index(ctx);
 
-	duk_push_hstring_stridx(ctx, DUK_STRIDX_NEWLINE_TAB);
+	duk_push_hstring_stridx(ctx, DUK_STRIDX_NEWLINE_4SPACE);
 	duk_push_this(ctx);
 
 	/* [ ... this tracedata sep this ] */
