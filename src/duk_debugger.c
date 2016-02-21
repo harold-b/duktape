@@ -610,10 +610,17 @@ DUK_INTERNAL void duk_debug_write_int(duk_hthread *thr, duk_int32_t x) {
 
 /* Write unsigned 32-bit integer. */
 DUK_INTERNAL void duk_debug_write_uint(duk_hthread *thr, duk_uint32_t x) {
-	/* XXX: there's currently no need to support full 32-bit unsigned
-	 * integer range in practice.  If that becomes necessary, add a new
-	 * dvalue type or encode as an IEEE double.
+	/* The debugger protocol doesn't support a plain integer encoding for
+	 * the full 32-bit unsigned range (only 32-bit signed).  For now,
+	 * unsigned 32-bit values simply written as signed ones.  This is not
+	 * a concrete issue except for 32-bit heaphdr fields.  Proper solutions
+	 * would be to (a) write such integers as IEEE doubles or (b) add an
+	 * unsigned 32-bit dvalue.
 	 */
+	if (x >= 0x80000000UL) {
+		DUK_D(DUK_DPRINT("writing unsigned integer 0x%08lx as signed integer",
+		                 (long) x));
+	}
 	duk_debug_write_int(thr, (duk_int32_t) x);
 }
 
@@ -735,7 +742,9 @@ DUK_INTERNAL void duk_debug_write_tval(duk_hthread *thr, duk_tval *tv) {
 	duk_c_function lf_func;
 	duk_small_uint_t lf_flags;
 	duk_uint8_t buf[4];
-	duk_double_union du;
+	duk_double_union du1;
+	duk_double_union du2;
+	duk_int32_t i32;
 
 	DUK_ASSERT(thr != NULL);
 	DUK_ASSERT(tv != NULL);
@@ -780,14 +789,43 @@ DUK_INTERNAL void duk_debug_write_tval(duk_hthread *thr, duk_tval *tv) {
 	case DUK_TAG_FASTINT:
 #endif
 	default:
-		/* Numbers are normalized to big (network) endian. */
+		/* Numbers are normalized to big (network) endian.  We're
+		 * to use integer dvalues when there's no loss of precision.
+		 */
 		DUK_ASSERT(!DUK_TVAL_IS_UNUSED(tv));
 		DUK_ASSERT(DUK_TVAL_IS_NUMBER(tv));
-		du.d = DUK_TVAL_GET_NUMBER(tv);
-		DUK_DBLUNION_DOUBLE_HTON(&du);
+		du1.d = DUK_TVAL_GET_NUMBER(tv);
 
-		duk_debug_write_byte(thr, 0x1a);
-		duk_debug_write_bytes(thr, (const duk_uint8_t *) du.uc, sizeof(du.uc));
+		/* FIXME: duk__tval_number_to_arr_idx; optimize check. */
+
+		i32 = (duk_int32_t) du1.d;
+		du2.d = (duk_double_t) i32;
+		DUK_D(DUK_DPRINT("i32=%ld du1=%02x%02x%02x%02x%02x%02x%02x%02x du2=%02x%02x%02x%02x%02x%02x%02x%02x",
+		                 (long) i32,
+		                 (unsigned int) du1.uc[0],
+		                 (unsigned int) du1.uc[1],
+		                 (unsigned int) du1.uc[2],
+		                 (unsigned int) du1.uc[3],
+		                 (unsigned int) du1.uc[4],
+		                 (unsigned int) du1.uc[5],
+		                 (unsigned int) du1.uc[6],
+		                 (unsigned int) du1.uc[7],
+		                 (unsigned int) du2.uc[0],
+		                 (unsigned int) du2.uc[1],
+		                 (unsigned int) du2.uc[2],
+		                 (unsigned int) du2.uc[3],
+		                 (unsigned int) du2.uc[4],
+		                 (unsigned int) du2.uc[5],
+		                 (unsigned int) du2.uc[6],
+		                 (unsigned int) du2.uc[7]));
+
+		if (DUK_MEMCMP((const void *) du1.uc, (const void *) du2.uc, sizeof(du1.uc)) == 0) {
+			duk_debug_write_int(thr, i32);
+		} else {
+			DUK_DBLUNION_DOUBLE_HTON(&du1);
+			duk_debug_write_byte(thr, 0x1a);
+			duk_debug_write_bytes(thr, (const duk_uint8_t *) du1.uc, sizeof(du1.uc));
+		}
 	}
 }
 

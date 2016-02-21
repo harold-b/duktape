@@ -106,6 +106,7 @@ DUK_LOCAL duk_uint32_t duk__tval_number_to_arr_idx(duk_tval *tv) {
 	DUK_ASSERT(tv != NULL);
 	DUK_ASSERT(DUK_TVAL_IS_NUMBER(tv));
 
+	/* FIXME: -0? */
 	dbl = DUK_TVAL_GET_NUMBER(tv);
 	idx = (duk_uint32_t) dbl;
 	if ((duk_double_t) idx == dbl) {
