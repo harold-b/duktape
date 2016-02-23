@@ -45,6 +45,8 @@
 #define DUK_DBG_CMD_GETBYTECODE   0x21
 #define DUK_DBG_CMD_APPREQUEST    0x22
 
+#define DUK_DBG_CMD_GETCLOSURES   0x25
+
 #if defined(DUK_USE_DEBUGGER_SUPPORT)
 DUK_INTERNAL_DECL void duk_debug_do_detach(duk_heap *heap);
 

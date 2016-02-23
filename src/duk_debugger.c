@@ -1738,6 +1738,285 @@ DUK_LOCAL void duk__debug_handle_get_bytecode(duk_hthread *thr, duk_heap *heap) 
 	duk_debug_write_eom(thr);
 }
 
+DUK_LOCAL void duk__debug_dump_obj_keys(duk_hthread *thr, duk_heap *heap, duk_hobject *obj) {
+
+    duk_uint_fast32_t i;
+
+    /* Property table */
+    {       
+        duk_uint_fast32_t n;
+        duk_hstring **h_keys_base;
+
+        h_keys_base = DUK_HOBJECT_E_GET_KEY_BASE(heap, obj);
+        n = DUK_HOBJECT_GET_ENEXT(obj);
+        for(i = 0; i < n; i++) {
+            
+            if(h_keys_base[i] == NULL)
+                continue;
+
+            duk_debug_write_hstring(thr, h_keys_base[i]);
+        }
+    }
+
+    /* Property table: array part. */
+	for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ASIZE(obj); i++) {
+        duk_hstring *key;
+
+        key = DUK_HOBJECT_E_GET_KEY(heap, obj, i);
+		if (!key) {
+			continue;
+		}
+
+        duk_debug_write_hstring(thr, key);
+	}
+}
+
+DUK_LOCAL void duk__debug_write_register_keys(duk_hthread *thr, duk_heap *heap, duk_activation *act, duk_hobject **penv) {
+    DUK_UNREF( heap );
+
+    duk_tval *tv;
+    duk_hobject *func;
+    duk_hobject *varmap;
+    duk_hobject *env;
+    
+    /* See: duk__get_identifier_reference for reference */
+
+    env = act->lex_env;
+    
+    if( env == NULL )
+    {
+        func = DUK_ACT_GET_FUNC( act );
+
+        DUK_ASSERT( func != NULL );
+        DUK_ASSERT( DUK_HOBJECT_HAS_NEWENV( func ) );
+        DUK_ASSERT( DUK_HOBJECT_IS_COMPILEDFUNCTION( func ) );
+
+        // Grab var map
+        tv = duk_hobject_find_existing_entry_tval_ptr( thr->heap, func,
+        DUK_HTHREAD_STRING_INT_VARMAP( thr ) );
+        DUK_ASSERT( tv );
+
+        if( !tv )
+            return;
+
+        DUK_ASSERT( DUK_TVAL_IS_OBJECT( tv ) );
+        varmap = DUK_TVAL_GET_OBJECT( tv );
+        DUK_ASSERT( varmap != NULL );
+
+        /* scope start, register keys would always be locals */
+        duk__debug_dump_obj_keys(thr, heap, varmap);
+        duk_debug_write_int(thr, 0);    /* scope end marker */
+
+
+        /* if env was NULL it's set here to the lex env or to the global */
+        tv = duk_hobject_find_existing_entry_tval_ptr( thr->heap, func, DUK_HTHREAD_STRING_INT_LEXENV( thr ) );
+        if( tv ) {
+            DUK_ASSERT( DUK_TVAL_IS_OBJECT( tv ) );
+            env = DUK_TVAL_GET_OBJECT( tv );
+        }
+        else {
+            DUK_ASSERT( duk_hobject_find_existing_entry_tval_ptr( thr->heap, func, DUK_HTHREAD_STRING_INT_VARENV( thr ) ) == NULL );
+            env = thr->builtins[DUK_BIDX_GLOBAL_ENV];
+        }
+    }
+
+    /* return environment to walk the prototype chain */
+    *penv = env;
+}
+
+DUK_LOCAL void duk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *heap, duk_activation *act, duk_hobject *env) {
+    duk_uint_t sanity;  
+
+    /* Reference: duk__getid_open_decl_env_regs */
+    /* Enumerate all keys find along the prototype chain*/
+    sanity = DUK_HOBJECT_PROTOTYPE_CHAIN_SANITY;
+	while (env != NULL) {
+		duk_small_int_t cl;
+
+		
+		DUK_ASSERT(DUK_HOBJECT_IS_ENV(env));
+		DUK_ASSERT(!DUK_HOBJECT_HAS_ARRAY_PART(env));
+
+		cl = DUK_HOBJECT_GET_CLASS_NUMBER(env);
+		DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV || cl == DUK_HOBJECT_CLASS_DECENV);
+		if (cl == DUK_HOBJECT_CLASS_DECENV) {
+			/*
+			 *  Declarative environment record.
+			 *
+			 *  Identifiers can never be stored in ancestors and are
+			 *  always plain values, so we can use an internal helper
+			 *  and access the value directly with an duk_tval ptr.
+			 *
+			 *  A closed environment is only indicated by it missing
+			 *  the "book-keeping" properties required for accessing
+			 *  register-bound variables.
+			 */
+
+			while ( !DUK_HOBJECT_HAS_ENVRECCLOSED(env)) {
+                /* make sure it's open */
+                duk_hobject *env_func;
+                duk_hobject *varmap;
+                duk_tval *tv;
+
+                DUK_ASSERT( DUK_HOBJECT_IS_DECENV( env ) );
+
+                tv = duk_hobject_find_existing_entry_tval_ptr( thr->heap, env, DUK_HTHREAD_STRING_INT_CALLEE( thr ) );
+                if( !tv ) {
+                    /* env is closed, should be missing _Callee, _Thread, _Regbase */
+                    break;
+                }
+
+                DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+                DUK_ASSERT(DUK_TVAL_GET_OBJECT(tv) != NULL);
+                DUK_ASSERT(DUK_HOBJECT_IS_COMPILEDFUNCTION(DUK_TVAL_GET_OBJECT(tv)));
+
+                env_func = DUK_TVAL_GET_OBJECT(tv);
+                
+                DUK_ASSERT(env_func != NULL);
+
+                tv = duk_hobject_find_existing_entry_tval_ptr(thr->heap, env_func, DUK_HTHREAD_STRING_INT_VARMAP(thr));
+                if (!tv) {
+                    break;
+                }
+
+                DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+
+                varmap = DUK_TVAL_GET_OBJECT(tv);
+
+                DUK_ASSERT(varmap != NULL);
+
+                duk__debug_dump_obj_keys(thr, heap, varmap);
+                duk_debug_write_int(thr, 0);    /* scope end marker */
+
+                break;
+				/* already closed */
+			}
+		} else {
+			/*
+			 *  Object environment record.
+			 *
+			 *  Binding (target) object is an external, uncontrolled object.
+			 *  Identifier may be bound in an ancestor property, and may be
+			 *  an accessor.  Target can also be a Proxy which we must support
+			 *  here.
+			 */
+
+			/* XXX: we could save space by using _Target OR _This.  If _Target, assume
+			 * this binding is undefined.  If _This, assumes this binding is _This, and
+			 * target is also _This.  One property would then be enough.
+			 */
+            duk_tval *tv_target;
+			duk_hobject *target;
+
+			DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV);
+
+			tv_target = duk_hobject_find_existing_entry_tval_ptr(thr->heap, env, DUK_HTHREAD_STRING_INT_TARGET(thr));
+			
+            DUK_ASSERT(tv_target != NULL);
+			DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv_target));
+			
+            target = DUK_TVAL_GET_OBJECT(tv_target);
+			DUK_ASSERT(target != NULL);
+
+            /* Target may be a Proxy or property may be an accessor, so we must
+            * use an actual, Proxy-aware hasprop check here.
+            *
+            * out->holder is NOT set to the actual duk_hobject where the
+            * property is found, but rather the object binding target object.
+            */
+
+			if (DUK_HOBJECT_HAS_EXOTIC_PROXYOBJ(target)) {
+
+                /// TODO: Maybe implement this?
+                /// Proxy objects seem to be problematic.
+                /// We'll simlpy not support them. At least for now.
+
+				//found = duk_hobject_hasprop(thr, tv_target, &tv_name);
+			} else {
+				/* XXX: duk_hobject_hasprop() would be correct for
+				 * non-Proxy objects too, but it is about ~20-25%
+				 * slower at present so separate code paths for
+				 * Proxy and non-Proxy now.
+				 */
+                
+                duk__debug_dump_obj_keys(thr, heap, target );
+                duk_debug_write_int(thr, 0);    /* scope end marker */
+			}
+
+		}
+
+        if (sanity-- == 0) {
+            //DUK_ERROR(thr, DUK_ERR_INTERNAL_ERROR, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
+            /* No error on insanity. Just return silently */
+            break;
+        }
+
+        /* go up the hierarchy */
+		env = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env);
+
+        /* Ignore global object? */
+        //if(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env) == NULL)
+        //    break;
+	};
+}
+
+DUK_LOCAL void duk__debug_handle_get_closures(duk_hthread *thr, duk_heap *heap) {
+    duk_activation *act;
+    duk_hobject *env;
+    duk_int32_t level;
+    
+    DUK_D( DUK_DPRINT( "debug command GetClosures" ) );
+
+
+    /* See: - duk_hobject_find_existing_entry in duk_hobject_props
+    *       - duk_js_vars.c : duk__getid_activation_regs()
+    *       - duk__getvar_helper -> duk__get_identifier_reference
+    * First look up in activation record's function register,
+    * then move on to the prototype chain and look up
+    * the declarative and object environments
+    * 
+	*/
+
+
+    DUK_UNREF( heap );
+
+    if(duk_debug_peek_byte( thr ) != DUK_DBG_IB_EOM) {
+        level = duk_debug_read_int( thr );  /* optional callstack level */
+        if(level >= 0 || -level > (duk_int32_t)thr->callstack_top) {
+            DUK_D(DUK_DPRINT("invalid callstack level for GetClosures") );
+            duk_debug_write_error_eom(thr, DUK_DBG_ERR_NOTFOUND, "invalid callstack level");
+            return;
+        }
+        duk_debug_write_reply(thr);
+    }
+    else {
+        duk_debug_write_reply(thr);
+        if(thr->callstack_top == 0) {
+            duk_debug_write_int(thr, 0);
+            duk_debug_write_eom(thr);
+            return;
+        }
+
+        level = -1;
+    }
+
+    DUK_ASSERT( level < 0 && -level <= (duk_int32_t)thr->callstack_top );
+
+    act = thr->callstack + thr->callstack_top + level;
+    env = act->lex_env;
+
+    /* Get register vars first */
+    duk__debug_write_register_keys( thr, heap, act, &env );
+
+    /* Then walk up the prototype chain */
+    duk__debug_walk_proto_chain( thr, heap, act, env );
+
+    /* done */
+    duk_debug_write_eom( thr );
+}
+
+
+
 /* Process one debug message.  Automatically restore value stack top to its
  * entry value, so that individual message handlers don't need exact value
  * stack handling which is convenient.
@@ -1856,6 +2135,10 @@ DUK_LOCAL void duk__debug_process_message(duk_hthread *thr) {
 		DUK_D(DUK_DPRINT("debug notify, skipping"));
 		break;
 	}
+    case DUK_DBG_CMD_GETCLOSURES: {
+        duk__debug_handle_get_closures(thr, heap);
+        break;
+    }
 	default: {
 		DUK_D(DUK_DPRINT("invalid initial byte, drop connection: %d", (int) x));
 		goto fail;
