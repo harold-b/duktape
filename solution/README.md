@@ -1,0 +1,1 @@
+To develop, start with a base version & branch it. Generate a distributable by using make-dists.py. Then copy over the sources from dists/src-separate to the local src folder. Then make changes and test. Finally copy any changes you want back to the original src. Run make-dists.py again and we can use the single-file distributables.
