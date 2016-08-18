@@ -55,7 +55,16 @@
     <ClCompile Include="src\duk_bi_thread.c" />
     <ClCompile Include="src\duk_bi_thrower.c" />
     <ClCompile Include="src\duk_builtins.c" />
-    <ClCompile Include="src\duk_debugger.c" />
+    <ClCompile Include="src\duk_debugger.c">
+      <ExceptionHandling Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ExceptionHandling>
+      <ExceptionHandling Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ExceptionHandling>
+      <ExceptionHandling Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExceptionHandling>
+      <ExceptionHandling Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExceptionHandling>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+    </ClCompile>
     <ClCompile Include="src\duk_debug_fixedbuffer.c" />
     <ClCompile Include="src\duk_debug_heap.c" />
     <ClCompile Include="src\duk_debug_macros.c" />

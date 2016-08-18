@@ -2813,13 +2813,21 @@ DUK_INTERNAL void musaduk__debug_dump_obj_keys(duk_hthread *thr, duk_heap *heap,
 }
 
 DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *heap, duk_activation *act, duk_hobject *env,
-                                                  duk_uint_t mask) {
+                                                  duk_uint_t mask, duk_bool_t did_write_locals ) {
     duk_uint_t sanity;
-    duk_bool_t write_closures, write_globals, is_global;
+    duk_bool_t write_locals, write_closures, write_globals, is_local, is_global;
 
+    write_locals   = mask & MUDUK_SCOPE_MASK_LOCALS;
     write_closures = mask & MUDUK_SCOPE_MASK_CLOSURES;
     write_globals  = mask & MUDUK_SCOPE_MASK_GLOBALS;
     is_global = 0;
+
+    if(did_write_locals){
+        is_local = 0;
+    }
+    else {
+        is_local = 1;
+    }
 
     /* Reference: duk__getid_open_decl_env_regs */
     /* Enumerate all keys find along the prototype chain*/
@@ -2827,6 +2835,9 @@ DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *he
     while (env != NULL) {
 
         duk_small_int_t cl;
+        duk_bool_t wrote_keys;  /* did we have any keys to write? */
+
+        wrote_keys = 0;
 
         /* Ignore global object? */
         if (DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env) == NULL){
@@ -2895,6 +2906,7 @@ DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *he
 
                     musaduk__debug_dump_obj_keys(thr, heap, varmap);
                     duk_debug_write_int(thr, 0);    /* scope end marker */
+                    wrote_keys = 1;
 
                     break;
                     /* already closed */
@@ -2949,10 +2961,21 @@ DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *he
                 
                     musaduk__debug_dump_obj_keys(thr, heap, target );
                     duk_debug_write_int(thr, 0);    /* scope end marker */
+                    wrote_keys = 1;
                 }
 
             }
         } /* End write objects */
+
+        if(!wrote_keys && is_local) {
+            /* musa always write scope end marker for locals. 
+            *  So if we didn't write any keys, make sure to write the marker here.
+            */
+            duk_debug_write_int(thr, 0);
+        }
+
+        /* only the first run can be the locals */
+        is_local = 0;
 
         if (sanity-- == 0) {
             //DUK_ERROR(thr, DUK_ERR_INTERNAL_ERROR, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
@@ -2965,7 +2988,8 @@ DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *he
     };
 }
 
-DUK_INTERNAL void musaduk__debug_write_register_keys(duk_hthread *thr, duk_heap *heap, duk_activation *act, duk_hobject **penv) {
+DUK_INTERNAL void musaduk__debug_write_register_keys(duk_hthread *thr, duk_heap *heap, duk_activation *act,
+                                                     duk_hobject **penv, duk_bool_t write_locals, duk_bool_t* wrote_locals ) {
     DUK_UNREF(heap);
 
     duk_tval *tv;
@@ -2997,8 +3021,15 @@ DUK_INTERNAL void musaduk__debug_write_register_keys(duk_hthread *thr, duk_heap 
         DUK_ASSERT(varmap != NULL);
 
         /* scope start, register keys would always be locals */
-        musaduk__debug_dump_obj_keys(thr, heap, varmap);
-        
+        if(write_locals) {
+            musaduk__debug_dump_obj_keys(thr, heap, varmap);
+            duk_debug_write_int( thr, 0 );    /* scope end marker */
+
+            /* Let them know we wrote the locals from the register */
+            *wrote_locals = 1;
+        }
+
+
         /* if env was NULL it's set here to the lex env or to the global */
         tv = duk_hobject_find_existing_entry_tval_ptr(thr->heap, func, DUK_HTHREAD_STRING_INT_LEXENV(thr));
         if(tv) {
@@ -3020,6 +3051,10 @@ void musaduk__debug_handle_get_closures(duk_hthread *thr, duk_heap *heap) {
     duk_hobject *env;
     duk_uint32_t mask;  /* scope mask */
     duk_int32_t level;  /* stack level */
+    duk_bool_t did_write_locals;    /* To determine if we wrote the locals from the register 
+                                    in to know if we need to write
+                                    */
+    duk_bool_t should_write_locals;
 
     DUK_D(DUK_DPRINT("debug command GetScopeKeys"));
     DUK_UNREF(heap);
@@ -3095,16 +3130,19 @@ void musaduk__debug_handle_get_closures(duk_hthread *thr, duk_heap *heap) {
     duk_debug_write_reply(thr);
 
     /* Get register vars first */
-    if(mask & MUDUK_SCOPE_MASK_LOCALS) {
-        musaduk__debug_write_register_keys(thr, heap, act, &env);
-        duk_debug_write_int( thr, 0 );    /* scope end marker */
-    }
-    else {
-        duk_debug_write_int( thr, 0 );    /* scope end marker */
+    should_write_locals = (mask & MUDUK_SCOPE_MASK_LOCALS) == MUDUK_SCOPE_MASK_LOCALS;
+    did_write_locals    = 0;
+    
+    musaduk__debug_write_register_keys(thr, heap, act, &env,
+        should_write_locals, &did_write_locals);
+
+    if(!should_write_locals) {
+        /* write empty scope end marker */
+        duk_debug_write_int( thr, 0 );    
     }
 
     /* Then walk up the prototype chain */
-    musaduk__debug_walk_proto_chain(thr, heap, act, env, mask);
+    musaduk__debug_walk_proto_chain(thr, heap, act, env, mask, did_write_locals);
 
     /* Done */
     duk_debug_write_eom(thr);

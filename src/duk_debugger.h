@@ -70,6 +70,8 @@
 #define DUK_DBG_CMD_GETOBJPROPDESC       0x24
 #define DUK_DBG_CMD_GETOBJPROPDESCRANGE  0x25
 
+#define DUK_DBG_CMD_GETCLOSURES          0x7F
+
 /* The low 8 bits map directly to duk_hobject.h DUK_PROPDESC_FLAG_xxx.
  * The remaining flags are specific to the debugger.
  */

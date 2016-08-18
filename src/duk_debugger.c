@@ -6,6 +6,10 @@
 
 #if defined(DUK_USE_DEBUGGER_SUPPORT)
 
+/// +Harold Changes
+DUK_LOCAL void musaduk__debug_handle_get_closures(duk_hthread *thr, duk_heap *heap);
+/// -Harold Changes
+
 /*
  *  Helper structs
  */
@@ -2456,6 +2460,12 @@ DUK_LOCAL void duk__debug_process_message(duk_hthread *thr) {
 			break;
 		}
 #endif  /* DUK_USE_DEBUGGER_INSPECT */
+#if defined(MUDUK_USE_DEBUG_GET_CLOSURES)
+        case DUK_DBG_CMD_GETCLOSURES: {
+            musaduk__debug_handle_get_closures(thr, heap);
+            break;
+        }
+#endif /* MUDUK_USE_DEBUG_GET_CLOSURES */
 		default: {
 			DUK_D(DUK_DPRINT("debug command unsupported: %d", (int) cmd));
 			duk_debug_write_error_eom(thr, DUK_DBG_ERR_UNSUPPORTED, "unsupported command");
@@ -2763,6 +2773,385 @@ DUK_INTERNAL duk_bool_t duk_debug_remove_breakpoint(duk_hthread *thr, duk_small_
 
 	return 1;
 }
+
+/// + Harold Changes
+#define MUDUK_SCOPE_MASK_LOCALS   0x01
+#define MUDUK_SCOPE_MASK_CLOSURES 0x02
+#define MUDUK_SCOPE_MASK_GLOBALS  0x04
+
+DUK_INTERNAL void musaduk__debug_dump_obj_keys(duk_hthread *thr, duk_heap *heap, duk_hobject *obj) {
+
+    duk_uint_fast32_t i;
+
+    /* Property table */
+    {       
+        duk_uint_fast32_t n;
+        duk_hstring **h_keys_base;
+
+        h_keys_base = DUK_HOBJECT_E_GET_KEY_BASE(heap, obj);
+        n = DUK_HOBJECT_GET_ENEXT(obj);
+        for(i = 0; i < n; i++) {
+            
+            if(h_keys_base[i] == NULL)
+                continue;
+
+            duk_debug_write_hstring(thr, h_keys_base[i]);
+        }
+    }
+
+    /* Property table: array part. */
+    for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ASIZE(obj); i++) {
+        duk_hstring *key;
+
+        key = DUK_HOBJECT_E_GET_KEY(heap, obj, i);
+        if (!key) {
+            continue;
+        }
+
+        duk_debug_write_hstring(thr, key);
+    }
+}
+
+DUK_INTERNAL void musaduk__debug_walk_proto_chain(duk_hthread *thr, duk_heap *heap, duk_activation *act, duk_hobject *env,
+                                                  duk_uint_t mask, duk_bool_t did_write_locals ) {
+    duk_uint_t sanity;
+    duk_bool_t write_locals, write_closures, write_globals, is_local, is_global;
+
+    write_locals   = mask & MUDUK_SCOPE_MASK_LOCALS;
+    write_closures = mask & MUDUK_SCOPE_MASK_CLOSURES;
+    write_globals  = mask & MUDUK_SCOPE_MASK_GLOBALS;
+    is_global = 0;
+
+    if(did_write_locals){
+        is_local = 0;
+    }
+    else {
+        is_local = 1;
+    }
+
+    /* Reference: duk__getid_open_decl_env_regs */
+    /* Enumerate all keys find along the prototype chain*/
+    sanity = DUK_HOBJECT_PROTOTYPE_CHAIN_SANITY;
+    while (env != NULL) {
+
+        duk_small_int_t cl;
+        duk_bool_t wrote_keys;  /* did we have any keys to write? */
+
+        wrote_keys = 0;
+
+        /* Ignore global object? */
+        if (DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env) == NULL){
+            is_global = 1;
+        }
+        
+        if (is_global && !write_globals){
+            /* If we don't want to write global, skip*/
+            duk_debug_write_int(thr, 0);
+            return;
+        }
+        
+        DUK_ASSERT(DUK_HOBJECT_IS_ENV(env));
+        DUK_ASSERT(!DUK_HOBJECT_HAS_ARRAY_PART(env));
+
+        cl = DUK_HOBJECT_GET_CLASS_NUMBER(env);
+        DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV || cl == DUK_HOBJECT_CLASS_DECENV);
+
+        /* Only write closure keys if we were asked for them */
+        if (is_global || (!is_global && write_closures)) {
+            if (cl == DUK_HOBJECT_CLASS_DECENV){
+                /*
+                 *  Declarative environment record.
+                 *
+                 *  Identifiers can never be stored in ancestors and are
+                 *  always plain values, so we can use an internal helper
+                 *  and access the value directly with an duk_tval ptr.
+                 *
+                 *  A closed environment is only indicated by it missing
+                 *  the "book-keeping" properties required for accessing
+                 *  register-bound variables.
+                 */
+
+                while (!DUK_HOBJECT_HAS_ENVRECCLOSED(env)) {
+                    /* make sure it's open */
+                    duk_hobject *env_func;
+                    duk_hobject *varmap;
+                    duk_tval *tv;
+
+                    DUK_ASSERT( DUK_HOBJECT_IS_DECENV( env ) );
+
+                    tv = duk_hobject_find_existing_entry_tval_ptr( thr->heap, env, DUK_HTHREAD_STRING_INT_CALLEE( thr ) );
+                    if( !tv ) {
+                        /* env is closed, should be missing _Callee, _Thread, _Regbase */
+                        break;
+                    }
+
+                    DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+                    DUK_ASSERT(DUK_TVAL_GET_OBJECT(tv) != NULL);
+                    DUK_ASSERT(DUK_HOBJECT_IS_COMPILEDFUNCTION(DUK_TVAL_GET_OBJECT(tv)));
+
+                    env_func = DUK_TVAL_GET_OBJECT(tv);
+                
+                    DUK_ASSERT(env_func != NULL);
+
+                    tv = duk_hobject_find_existing_entry_tval_ptr(thr->heap, env_func, DUK_HTHREAD_STRING_INT_VARMAP(thr));
+                    if (!tv) {
+                        break;
+                    }
+
+                    DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+
+                    varmap = DUK_TVAL_GET_OBJECT(tv);
+
+                    DUK_ASSERT(varmap != NULL);
+
+                    musaduk__debug_dump_obj_keys(thr, heap, varmap);
+                    duk_debug_write_int(thr, 0);    /* scope end marker */
+                    wrote_keys = 1;
+
+                    break;
+                    /* already closed */
+                }
+            } else {
+                /*
+                 *  Object environment record.
+                 *
+                 *  Binding (target) object is an external, uncontrolled object.
+                 *  Identifier may be bound in an ancestor property, and may be
+                 *  an accessor.  Target can also be a Proxy which we must support
+                 *  here.
+                 */
+
+                /* XXX: we could save space by using _Target OR _This.  If _Target, assume
+                 * this binding is undefined.  If _This, assumes this binding is _This, and
+                 * target is also _This.  One property would then be enough.
+                 */
+                duk_tval *tv_target;
+                duk_hobject *target;
+
+                DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV);
+
+                tv_target = duk_hobject_find_existing_entry_tval_ptr(thr->heap, env, DUK_HTHREAD_STRING_INT_TARGET(thr));
+            
+                DUK_ASSERT(tv_target != NULL);
+                DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv_target));
+            
+                target = DUK_TVAL_GET_OBJECT(tv_target);
+                DUK_ASSERT(target != NULL);
+
+                /* Target may be a Proxy or property may be an accessor, so we must
+                * use an actual, Proxy-aware hasprop check here.
+                *
+                * out->holder is NOT set to the actual duk_hobject where the
+                * property is found, but rather the object binding target object.
+                */
+
+                if (DUK_HOBJECT_HAS_EXOTIC_PROXYOBJ(target)) {
+
+                    /// TODO: Maybe implement this?
+                    /// Proxy objects seem to be problematic.
+                    /// We'll simlpy not support them. At least for now.
+
+                    //found = duk_hobject_hasprop(thr, tv_target, &tv_name);
+                } else {
+                    /* XXX: duk_hobject_hasprop() would be correct for
+                     * non-Proxy objects too, but it is about ~20-25%
+                     * slower at present so separate code paths for
+                     * Proxy and non-Proxy now.
+                     */
+                
+                    musaduk__debug_dump_obj_keys(thr, heap, target );
+                    duk_debug_write_int(thr, 0);    /* scope end marker */
+                    wrote_keys = 1;
+                }
+
+            }
+        } /* End write objects */
+
+        if(!wrote_keys && is_local) {
+            /* musa always write scope end marker for locals. 
+            *  So if we didn't write any keys, make sure to write the marker here.
+            */
+            duk_debug_write_int(thr, 0);
+        }
+
+        /* only the first run can be the locals */
+        is_local = 0;
+
+        if (sanity-- == 0) {
+            //DUK_ERROR(thr, DUK_ERR_INTERNAL_ERROR, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
+            /* No error on insanity. Just return silently */
+            break;
+        }
+
+        /* go up the hierarchy */
+        env = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env);
+    };
+}
+
+DUK_INTERNAL void musaduk__debug_write_register_keys(duk_hthread *thr, duk_heap *heap, duk_activation *act,
+                                                     duk_hobject **penv, duk_bool_t write_locals, duk_bool_t* wrote_locals ) {
+    DUK_UNREF(heap);
+
+    duk_tval *tv;
+    duk_hobject *func;
+    duk_hobject *varmap;
+    duk_hobject *env;
+    
+    /* See: duk__get_identifier_reference for reference */
+
+    env = act->lex_env;
+    
+    if( env == NULL )
+    {
+        func = DUK_ACT_GET_FUNC(act);
+
+        DUK_ASSERT(func != NULL);
+        DUK_ASSERT(DUK_HOBJECT_HAS_NEWENV(func));
+        DUK_ASSERT(DUK_HOBJECT_IS_COMPILEDFUNCTION(func));
+
+        // Grab var map
+        tv = duk_hobject_find_existing_entry_tval_ptr(thr->heap, func, DUK_HTHREAD_STRING_INT_VARMAP(thr));
+        DUK_ASSERT(tv);
+
+        if(!tv)
+            return;
+
+        DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+        varmap = DUK_TVAL_GET_OBJECT(tv);
+        DUK_ASSERT(varmap != NULL);
+
+        /* scope start, register keys would always be locals */
+        if(write_locals) {
+            musaduk__debug_dump_obj_keys(thr, heap, varmap);
+            duk_debug_write_int( thr, 0 );    /* scope end marker */
+
+            /* Let them know we wrote the locals from the register */
+            *wrote_locals = 1;
+        }
+
+
+        /* if env was NULL it's set here to the lex env or to the global */
+        tv = duk_hobject_find_existing_entry_tval_ptr(thr->heap, func, DUK_HTHREAD_STRING_INT_LEXENV(thr));
+        if(tv) {
+            DUK_ASSERT(DUK_TVAL_IS_OBJECT(tv));
+            env = DUK_TVAL_GET_OBJECT(tv);
+        }
+        else {
+            DUK_ASSERT(duk_hobject_find_existing_entry_tval_ptr(thr->heap, func, DUK_HTHREAD_STRING_INT_VARENV(thr)) == NULL);
+            env = thr->builtins[DUK_BIDX_GLOBAL_ENV];
+        }
+    }
+
+    /* return environment to walk the prototype chain */
+    *penv = env;
+}
+
+void musaduk__debug_handle_get_closures(duk_hthread *thr, duk_heap *heap) {
+    duk_activation *act;
+    duk_hobject *env;
+    duk_uint32_t mask;  /* scope mask */
+    duk_int32_t level;  /* stack level */
+    duk_bool_t did_write_locals;    /* To determine if we wrote the locals from the register 
+                                    in to know if we need to write
+                                    */
+    duk_bool_t should_write_locals;
+
+    DUK_D(DUK_DPRINT("debug command GetScopeKeys"));
+    DUK_UNREF(heap);
+
+
+    /* Reference:
+    * See: - duk_hobject_find_existing_entry in duk_hobject_props
+    *       - duk_js_vars.c : duk__getid_activation_regs()
+    *       - duk__getvar_helper -> duk__get_identifier_reference
+    * First look up in activation record's function register,
+    * then move on to the prototype chain and look up
+    * the declarative and object environments
+    * 
+    */
+
+
+    /* GetScopeKeys Format:
+    * REQ <int: 0x7F> <int: scopeMask> [<int: stackLevel>] EOM
+    * REP [<string: localKeys>*] <int: 0(end of scope)>
+    *     [[<string: closureKeys*>] <int: 0(end of scope)>]
+    *     [<string: globalKeys>*] <int: 0(end of scope)>
+    *
+    * Returns an array of keys for each scope. We support 3 scopes:
+    *   Local    : 0x1
+    *   Closures : 0x2
+    *   Global   : 0x4
+    *
+    * scopeMask specifies whichs scopes to return. If a scope is not
+    * specified in the mask, or if it is specified, but that scope does not
+    * contain any keys, then no keys are returned, but the 'end of scope' marker
+    * is always returned for each scope, except for closures. If closures are
+    * not specified or a closure is empty, no scope end markes will be written.
+    * In conclusion: The locals scope end marker is guaranteed and will always be the
+    * first one, the globals scope end marker is also guaranteed and will always
+    * be the last one. But no closure marker is guaranteed to appear.
+    */
+    if(duk_debug_peek_byte(thr) != DUK_DBG_IB_EOM) {
+        /* Read scope mask */
+        mask = duk_debug_read_int(thr);
+
+        /* Optional callstack level */
+        if(duk_debug_peek_byte(thr) != DUK_DBG_IB_EOM) {
+            level = duk_debug_read_int(thr); 
+            if(level >= 0 || -level > (duk_int32_t)thr->callstack_top) {
+                DUK_D(DUK_DPRINT("invalid callstack level for GetScopeKeys"));
+                duk_debug_write_error_eom(thr, DUK_DBG_ERR_NOTFOUND, "invalid callstack level");
+                return;
+            }
+        }
+        else {
+            /* No callstack specified, set to -1*/
+            level = -1;
+        }
+    }
+
+    /* Check for emtpy callstack */
+    if(thr->callstack_top == 0) {
+        /* Write empty scopes msg */
+        duk_debug_write_reply(thr);
+        duk_debug_write_int(thr, 0);
+        duk_debug_write_int(thr, 0);
+        duk_debug_write_eom(thr);
+        return;
+    }
+    
+
+    DUK_ASSERT(level < 0 && -level <= (duk_int32_t)thr->callstack_top);
+
+    act = thr->callstack + thr->callstack_top + level;
+    env = act->lex_env;
+
+    /* Begin reply */
+    duk_debug_write_reply(thr);
+
+    /* Get register vars first */
+    should_write_locals = (mask & MUDUK_SCOPE_MASK_LOCALS) == MUDUK_SCOPE_MASK_LOCALS;
+    did_write_locals    = 0;
+    
+    musaduk__debug_write_register_keys(thr, heap, act, &env,
+        should_write_locals, &did_write_locals);
+
+    if(!should_write_locals) {
+        /* write empty scope end marker */
+        duk_debug_write_int( thr, 0 );    
+    }
+
+    /* Then walk up the prototype chain */
+    musaduk__debug_walk_proto_chain(thr, heap, act, env, mask, did_write_locals);
+
+    /* Done */
+    duk_debug_write_eom(thr);
+}
+
+#undef MUDUK_SCOPE_MASK_LOCALS
+#undef MUDUK_SCOPE_MASK_CLOSURES
+#undef MUDUK_SCOPE_MASK_GLOBALS
+/// - Harold Changes
 
 #undef DUK__SET_CONN_BROKEN
 
