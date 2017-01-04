@@ -60,3 +60,5 @@
 /references/ECMA-262 5.1 edition June 2011.pdf
 /references/ECMA-262.pdf
 bin/
+obj/
+tmp/
