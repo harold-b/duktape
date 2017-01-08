@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 py -2 tools/configure.py 				\
-	--output-directory ./tmp/configs 	\
+	--output-directory ./tmp/debug    	\
 	--source-directory src-input 		\
 	--config-metadata config 			\
     --dll								\
