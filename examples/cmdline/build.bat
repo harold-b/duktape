@@ -17,16 +17,20 @@ mkdir %OUT_DIR%
 
 SET SOURCES=^
 	"duk_cmdline.c" ^
-	"../../dist/src/duktape.c"
+	"../../dist/src/duktape.c" ^
+	"../debug-trans-socket/duk_trans_socket_windows.c"
 
 SET OBJECTS=^
 	"%OBJ_DIR%duk_cmdline.obj" ^
-	"%OBJ_DIR%duktape.obj"
+	"%OBJ_DIR%duktape.obj" ^
+	"%OBJ_DIR%duk_trans_socket_windows.obj"
 
-echo %SOURCES%
 echo Compiling...
 CL /nologo /c /MT /MP /EHsc /GL /O2 ^
+	/I"./" ^
 	/I"../../dist/src" ^
+	/I"../debug-trans-socket" ^
+	/DDUK_OPT_HAVE_CUSTOM_H ^
 	/Fo%OBJ_DIR% %SOURCES%
 
  echo Linking...
