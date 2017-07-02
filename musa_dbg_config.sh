@@ -8,12 +8,13 @@ py -2 tools/configure.py 				\
 	--source-directory src-input 		\
     --config-metadata config            \
     --line-directives                   \
-	-DDUK_USE_FASTINT 					\
-    -DDUK_USE_ASSERTIONS				\
-    -DDUK_USE_DEBUGGER_SUPPORT			\
-    -DDUK_USE_INTERRUPT_COUNTER			\
-    -DDUK_USE_DEBUGGER_INSPECT			\
-    -DDUK_USE_DEBUGGER_DUMPHEAP			\
+    --dll                               \
+    -DDUK_USE_FASTINT                   \
+    -DDUK_USE_ASSERTIONS                \
+    -DDUK_USE_DEBUGGER_SUPPORT          \
+    -DDUK_USE_INTERRUPT_COUNTER         \
+    -DDUK_USE_DEBUGGER_INSPECT          \
+    -DDUK_USE_DEBUGGER_DUMPHEAP         \
     -DDUK_USE_DEBUGGER_THROW_NOTIFY     \
     -DDUK_USE_JSON_STRINGIFY_FASTPATH   \
     -DDUK_USE_JSON_QUOTESTRING_FASTPATH \
